@@ -1,0 +1,10 @@
+config R8169_RS
+    tristate "Rust driver for Realtek 8169"
+    depends on PCI
+    depends on RUST
+
+    default n
+
+    help
+      Rust port of the Realtek 8169/8168/8101 driver.
+      Say M to build as a module, Y to build in-tree.
