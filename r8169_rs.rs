@@ -1,6 +1,7 @@
-use kernel::pci;
+mod defs;
 
-struct Rtl8169Driver;
+use crate::defs::*;
+use kernel::pci;
 
 kernel::module_pci_driver! {
     type: Rtl8169Driver,
