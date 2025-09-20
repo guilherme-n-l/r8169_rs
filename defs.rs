@@ -6,33 +6,35 @@ use kernel::{
     bindings,
     bits::genmask_u32,
     clk::Clk,
+    device::Device,
     dma::CoherentAllocation,
+    firmware::Firmware,
+    io::Io,
     net::phy::Device as PhyDevice,
     page::Page,
     pci::Device as PciDevice,
     sizes::{SZ_1K, SZ_16K},
     sync::lock::{mutex::Mutex, spinlock::SpinLock},
     transmute::{AsBytes, FromBytes},
+    workqueue::Work,
 };
 
 macro_rules! define_flags {
     (@inner $field:ident, $n:expr;) => {};
 
     (@inner $field:ident, $n:expr;
-        $const_name:ident, $setter:ident => $getter:ident;
+        $setter:ident => $getter:ident;
         $($rest:tt)*
     ) => {
-        const $const_name: u8 = 1 << $n;
-
         pub(crate) fn $getter(&self) -> bool {
-            (self.$field & Self::$const_name) != 0
+            (self.$field & (1 << $n)) != 0
         }
 
         pub(crate) fn $setter(&mut self, val: bool) -> bool {
             self.$field = if val {
-                self.$field | Self::$const_name
+                self.$field | (1 << $n)
             } else {
-                self.$field & !Self::$const_name
+                self.$field & !(1 << $n)
             };
             val
         }
@@ -42,9 +44,9 @@ macro_rules! define_flags {
 
     (
         $field:ident;
-        $($const_name:ident, $setter:ident => $getter:ident;)*
+        $($setter:ident => $getter:ident;)*
     ) => {
-        define_flags!(@inner $field, 0; $($const_name, $setter => $getter;)*);
+        define_flags!(@inner $field, 0; $($setter => $getter;)*);
     };
 }
 
@@ -82,7 +84,7 @@ pub(crate) struct RtlChipInfo {
 }
 
 pub(crate) struct RingInfo {
-    // skb: T, // TODO
+    skb: bindings::sk_buff,
     len: u32,
 }
 
@@ -140,17 +142,30 @@ pub(crate) struct TcOffset {
 }
 
 pub(crate) struct LedClassDev {
-    // led: T, // TODO
-    // ndev: T, // TODO
+    led: bindings::led_classdev,
+    ndev: bindings::net_device,
     index: i32,
 }
 
+pub(crate) struct Wk {
+    flags: u8,
+    work: Work<()>,
+}
+
+impl Wk {
+    define_flags! {flags;
+        set_task_reset_pending => task_reset_pending;
+        set_task_tx_timeout => task_tx_timeout;
+        set_max => max;
+    }
+}
+
 pub(crate) struct Rtl8169Private {
-    // void __iomem *mmio_addr;	/* memory map physical address */ // TODO
+    mmio_addr: Io<0>, /* memory map physical address */
     pci_dev: PciDevice,
-    // struct net_device *dev; // TODO
+    dev: bindings::net_device,
     phy_device: PhyDevice,
-    // struct napi_struct napi; // TODO
+    napi: bindings::napi_struct,
     mac_version: MacVersion,
     rtl_dash_type: DashType,
     cur_rx: u32, /* Index into the Rx descriptor buffer of next Rx pkt. */
@@ -166,30 +181,25 @@ pub(crate) struct Rtl8169Private {
     irq_mask: u32,
     irq: i32,
     clk: Clk,
-    //
-    // struct {
-    // 	DECLARE_BITMAP(flags, RTL_FLAG_MAX);
-    // 	struct work_struct work;
-    // } wk; // TODO
-    //
+    wk: Wk,
     mac_ocp_lock: SpinLock<()>,
     led_lock: Mutex<()>, /* serialize LED ctrl RMW access */
     flags: u8,
-    // dma_addr_t counters_phys_addr; // TODO
+    counters_phys_addr: bindings::dma_addr_t,
     rtl8169_counters: Counters,
     tc_offset: TcOffset,
     saved_wolopts: u32,
-    firmware: Firmware,
-    // struct rtl_fw *rtl_fw; // TODO
+    firmware_name: RtlFirmwareName,
+    firmware: RtlFirmware,
     leds: LedClassDev,
     ocp_base: u32,
 }
 
 impl Rtl8169Private {
     define_flags! {flags;
-        SUPPORTS_GMII, set_supports_gmii => supports_gmii;
-        ASPM_MANAGEABLE, set_aspm_manageable => aspm_manageable;
-        DASH_ENABLED, set_dash_enabled => dash_enabled;
+         set_supports_gmii => supports_gmii;
+         set_aspm_manageable => aspm_manageable;
+         set_dash_enabled => dash_enabled;
     }
 }
 
@@ -298,12 +308,6 @@ impl MacVersion {
     }
 }
 
-pub(crate) enum Flag {
-    RtlFlagTaskResetPending,
-    RtlFlagTaskTxTimeout,
-    RtlFlagMax,
-}
-
 pub(crate) enum DashType {
     RtlDashNone,
     RtlDashDP,
@@ -316,12 +320,12 @@ pub(crate) enum Rtl8169IdInfo {
     NoGbit,
 }
 
-pub(crate) type Firmware = &'static str;
+pub(crate) type RtlFirmwareName = &'static str;
 
-pub(crate) mod firmware {
+pub(crate) mod rtl_firmware_name {
     macro_rules! new_firmware {
         ($name:ident, $value:expr) => {
-            pub(crate) const $name: super::Firmware = $value;
+            pub(crate) const $name: super::RtlFirmwareName = $value;
         };
     }
 
@@ -351,6 +355,20 @@ pub(crate) mod firmware {
     new_firmware!(RTL8126A_2, "rtl_nic/rtl8126a-2.fw");
     new_firmware!(RTL8126A_3, "rtl_nic/rtl8126a-3.fw");
     new_firmware!(RTL8127A_1, "rtl_nic/rtl8127a-1.fw");
+}
+
+#[repr(C)]
+pub(crate) struct RtlPhyAction {
+    code: u32,
+    size: usize,
+}
+
+pub(crate) struct RtlFirmware {
+    fw: Firmware,
+    fw_name: RtlFirmwareName,
+    dev: Device<()>,
+    version: &'static str,
+    phy_action: RtlPhyAction,
 }
 
 pub(crate) mod size {
