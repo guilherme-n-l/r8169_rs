@@ -1,3 +1,6 @@
+mod helper;
+mod defs;
+
 use kernel::pci;
 
 struct Rtl8169Driver;
