@@ -8,6 +8,8 @@
 //! This crate provides a PCI driver implementation for Realtek Ethernet controllers.
 
 mod defs;
+mod macros;
+mod firmware;
 mod helper;
 
 use crate::defs::{register::TX_CONFIG, *};
